@@ -1,0 +1,1 @@
+ncu --set full --target-processes all --page source --print-source cuda,sass -o /tmp/test_gemv -f python ${SCRIPT_DIR}/test_gemv.py --warmup 1 --iterations 1 --evict-mb 128

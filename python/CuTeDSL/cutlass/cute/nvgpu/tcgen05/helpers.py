@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2025 - 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: LicenseRef-NvidiaProprietary
 #
 # Use of this software is governed by the terms and conditions of the
@@ -285,7 +285,9 @@ def find_tmem_tensor_col_offset(tmem_tensor: Tensor, *, loc=None, ip=None) -> In
     """
     tmem_col_mask = 0x0000FFFF
     offset = (
-        core.cosize(recast_tensor(tmem_tensor, Int32).layout, loc=loc, ip=ip)
+        core.cosize(
+            recast_tensor(tmem_tensor, Int32, loc=loc, ip=ip).layout, loc=loc, ip=ip
+        )
         & tmem_col_mask
     )
     if isinstance(offset, int):

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2025 - 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: LicenseRef-NvidiaProprietary
 #
 # Use of this software is governed by the terms and conditions of the
@@ -529,6 +529,7 @@ def _get_self_module():
     return inspect.getmodule(_get_self_module)
 
 
+@lru_cache(maxsize=16)
 def cf_symbol_check(symbol):
     """
     Check if the symbol is control flow symbol from current module.

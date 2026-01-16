@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2025 - 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: LicenseRef-NvidiaProprietary
 #
 # Use of this software is governed by the terms and conditions of the
@@ -235,20 +235,20 @@ def get_prefix_dsl_libs(prefix: str):
             return prefix_libs_existing
 
         def get_libs_cand(start):
-            target_libs = {
-                "mlir_c_runner_utils",
-                "mlir_runner_utils",
-                "mlir_cuda_runtime",
+            target_cuda_dialect_libs = {
+                "cuda_dialect_runtime",
             }
             lib_folder_guesses = [
                 "lib",
             ]
 
-            libs_cand = find_libs_in_ancestors(start, target_libs, lib_folder_guesses)
-            if libs_cand:
-                dsl_libs = ":".join(libs_cand)
-                return dsl_libs
-
+            for target_libs in [
+                target_cuda_dialect_libs,
+            ]:
+                libs_cand = find_libs_in_ancestors(start, target_libs, lib_folder_guesses)
+                if libs_cand:
+                    dsl_libs = ":".join(libs_cand)
+                    return dsl_libs
             return None
 
         # find from install folder
@@ -296,6 +296,7 @@ class EnvironmentVarManager(LogEnvironmentManager):
     - [DSL_NAME]_FILTER_STACKTRACE: Filter internal stacktrace (default: True)
     File options:
     - [DSL_NAME]_DUMP_DIR: Directory to dump the generated files (default: current working directory)
+    - [DSL_NAME]_CACHE_DIR: Cache directory (default: /tmp/{dsl_name}_python_cache_{tmpfile_suffix})
     - [DSL_NAME]_KEEP_IR: Save generated IR in a file (default: False)
     - [DSL_NAME]_KEEP_PTX: Save generated PTX in a file (default: False)
     - [DSL_NAME]_KEEP_CUBIN: Save generated CUBIN in a file (default: False)
@@ -310,8 +311,8 @@ class EnvironmentVarManager(LogEnvironmentManager):
     - [DSL_NAME]_ENABLE_OPTIMIZATION_WARNINGS: Enable warnings of optimization warnings (default: False)
     - [DSL_NAME]_JIT_TIME_PROFILING: Whether or not to profile the IR generation/compilation/execution time (default: False)
     - [DSL_NAME]_DISABLE_FILE_CACHING: Disable file caching (default: False)
-    - [DSL_NAME]_FILE_CACHING_CAPACITY: Limits the number of the cache save/load files (default: 1000)
     - [DSL_NAME]_LIBS: Path to dependent shared libraries (default: None)
+    - [DSL_NAME]_ENABLE_TVM_FFI: Enable TVM-FFI or not (default: False)
     """
 
     def __init__(self, prefix="DSL"):
@@ -332,6 +333,7 @@ class EnvironmentVarManager(LogEnvironmentManager):
 
         # File options
         self.keep_ir = get_bool_env_var(f"{prefix}_KEEP_IR", False)
+        self.cache_dir = get_str_env_var(f"{prefix}_CACHE_DIR", None)
         # Other options
         self.dryrun = get_bool_env_var(f"{prefix}_DRYRUN", False)
         self.arch = get_str_env_var(f"{prefix}_ARCH", detect_gpu_arch(prefix))
@@ -347,9 +349,6 @@ class EnvironmentVarManager(LogEnvironmentManager):
         self.disable_file_caching = get_bool_env_var(
             f"{prefix}_DISABLE_FILE_CACHING", False
         )
-        self.file_caching_capacity = get_int_env_var(
-            f"{prefix}_FILE_CACHING_CAPACITY", 1000
-        )
         # set cuda
         self.cuda_toolkit = get_cuda_toolkit_path()
 
@@ -358,3 +357,5 @@ class EnvironmentVarManager(LogEnvironmentManager):
 
         # whether to enable assert in host and device code
         self.enable_assertions = get_bool_env_var(f"{prefix}_ENABLE_ASSERTIONS", False)
+
+        self.enable_tvm_ffi = get_bool_env_var(f"{prefix}_ENABLE_TVM_FFI", False)

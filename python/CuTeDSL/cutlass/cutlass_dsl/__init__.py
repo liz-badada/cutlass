@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2025 - 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: LicenseRef-NvidiaProprietary
 #
 # Use of this software is governed by the terms and conditions of the
@@ -52,6 +52,7 @@ from ..base_dsl.compiler import (
     KeepPTX,
     GPUArch,
     LinkLibraries,
+    EnableTVMFFI,
 )
 from ..base_dsl.runtime.jit_arg_adapters import *
 

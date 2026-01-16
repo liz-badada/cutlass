@@ -1,4 +1,4 @@
-# Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2025 - 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 
 # Redistribution and use in source and binary forms, with or without
@@ -30,8 +30,6 @@
 import argparse
 import cuda.bindings.driver as cuda
 
-import torch
-
 import cutlass
 import cutlass.cute as cute
 import cutlass.cute.testing as testing
@@ -39,6 +37,8 @@ from cutlass.cute.runtime import from_dlpack
 
 
 def supports_pdl():
+    import torch
+
     return torch.cuda.get_device_capability()[0] >= 9
 
 
@@ -129,7 +129,6 @@ def elementwise_add_kernel(
     shape: cute.Shape,
     thr_layout: cute.Layout,
     val_layout: cute.Layout,
-    use_pdl: cutlass.Constexpr = True,
     is_first_kernel: cutlass.Constexpr = True,
 ):
     tidx, _, _ = cute.arch.thread_idx()
@@ -171,39 +170,34 @@ def elementwise_add_kernel(
     # In this case we won't see overlapping even when pdl is enabled.
     # In this example, we add a loop (10 times) for all the copy and compute operations in the following code
     # to make kernel running longer and make pdl benefits observable for both cuda-graph enabled and disabled cases.
-    if not use_pdl:
+    if is_first_kernel:
         for _ in range(10):
             cute.copy(copy_atom_load, thrA, frgA, pred=frgPred)
             cute.copy(copy_atom_load, thrB, frgB, pred=frgPred)
+        # Here we add the launch dependents instruction for the first kernel as a hint to the runtime to early-launch
+        # the next kernel. If the next kernel becomes concurrent, we will have overlap where the second kernel
+        # can start reading x to ensure an E2E speedup. Note the placement of launch dependents has no implication
+        # on correctness, only performance.
+        cute.arch.griddepcontrol_launch_dependents()
     else:
-        if is_first_kernel:
-            for _ in range(10):
-                cute.copy(copy_atom_load, thrA, frgA, pred=frgPred)
-                cute.copy(copy_atom_load, thrB, frgB, pred=frgPred)
-            # Here we add the launch dependents instruction for the first kernel as a hint to the runtime to early-launch
-            # the next kernel. If the next kernel becomes concurrent, we will have overlap where the second kernel
-            # can start reading x to ensure an E2E speedup. Note the placement of launch dependents has no implication
-            # on correctness, only performance.
-            cute.arch.griddepcontrol_launch_dependents()
-        else:
-            # In this example, the second kernel's second operand ``gB`` has no dependencies, its loading can overlap
-            # with the computation of ``gC`` from the first kernel.
-            for _ in range(10):
-                cute.copy(copy_atom_load, thrB, frgB, pred=frgPred)
+        # In this example, the second kernel's second operand ``gB`` has no dependencies, its loading can overlap
+        # with the computation of ``gC`` from the first kernel.
+        for _ in range(10):
+            cute.copy(copy_atom_load, thrB, frgB, pred=frgPred)
 
-            # For the second kernel, its first operand ``gA`` is dependent on the previous kernel, we must call
-            # griddepcontrol.wait to assure correctness. This instruction will block until the prior kernels finishes
-            # and its memory operations are visible. Since gA is written by the prior kernel, this will block until gA
-            # is visible to our kernel. Without it, we would have undefined behavior due to a race condition.
-            cute.arch.griddepcontrol_wait()
+        # For the second kernel, its first operand ``gA`` is dependent on the previous kernel, we must call
+        # griddepcontrol.wait to assure correctness. This instruction will block until the prior kernels finishes
+        # and its memory operations are visible. Since gA is written by the prior kernel, this will block until gA
+        # is visible to our kernel. Without it, we would have undefined behavior due to a race condition.
+        cute.arch.griddepcontrol_wait()
 
-            for _ in range(10):
-                cute.copy(copy_atom_load, thrA, frgA, pred=frgPred)
+        for _ in range(10):
+            cute.copy(copy_atom_load, thrA, frgA, pred=frgPred)
 
     for _ in range(10):
         result = frgA.load() + frgB.load()
         frgC.store(result)
-        cute.copy(copy_atom_store, frgC, thrC, pred=frgPred)
+    cute.copy(copy_atom_store, frgC, thrC, pred=frgPred)
 
 
 @cute.jit
@@ -231,15 +225,11 @@ def elementwise_add(
     cC = cute.zipped_divide(idC, tiler=tiler_mn)
 
     elementwise_add_kernel(
-        gA, gB, gC, cC, mC.shape, thr_layout, val_layout, use_pdl, is_first_kernel
+        gA, gB, gC, cC, mC.shape, thr_layout, val_layout, is_first_kernel
     ).launch(
         grid=[cute.size(gC, mode=[1]), 1, 1],
         block=[cute.size(tv_layout, mode=[0]), 1, 1],
-        # set cluster to enable cuLaunchKernelEx API for additional launch attributes setting
-        cluster=(1, 1, 1),
         stream=stream,
-        # Currently, pdl launch attribute is set in compile phase,
-        # so we need to recompile the function if we change the value of use_pdl for multiple runs.
         use_pdl=use_pdl,
     )
 
@@ -248,11 +238,13 @@ def run_pdl_example(
     M,
     N,
     skip_ref_check=False,
-    benchmark=True,
+    benchmark=False,
     warmup_iterations=5,
-    iterations=10,
+    iterations=100,
     use_pdl=True,
 ):
+    import torch
+
     if not torch.cuda.is_available():
         raise RuntimeError("Blackwell/Hopper GPU is required to run this example!")
 
@@ -274,7 +266,7 @@ def run_pdl_example(
 
     stream = torch.cuda.Stream()
     current_stream = cuda.CUstream(stream.cuda_stream)
-    # Since use_pdl and is_first_kernel are cutlass.Constexpr, we need to compile for
+    # Since is_first_kernel is cutlass.Constexpr, we need to compile for
     # the first and second kernel separately.
     compiled_func_first_kernel = cute.compile(
         elementwise_add,
@@ -284,6 +276,7 @@ def run_pdl_example(
         current_stream,
         use_pdl,
         is_first_kernel=True,
+        options="--enable-tvm-ffi",
     )
     compiled_func_second_kernel = cute.compile(
         elementwise_add,
@@ -293,30 +286,30 @@ def run_pdl_example(
         current_stream,
         use_pdl,
         is_first_kernel=False,
+        options="--enable-tvm-ffi",
     )
 
     # launch and run the two consecutive kernels in a same stream.
-    # Here, we simply use default stream.
-    def run_func(current_stream, u_tensor, v_tensor, w_tensor, x_tensor, y_tensor):
+    def run_func(current_stream, u, v, w, x, y):
         # Run first operation: w_tensor = u_tensor + v_tensor
         compiled_func_first_kernel(
-            u_tensor,
-            v_tensor,
-            w_tensor,
+            u,
+            v,
+            w,
             current_stream,
         )
         # Run second operation: y_tensor = w_tensor + x_tensor
         # its first operand ``w_tensor`` is the result of the first operation,
         # they use the same memory space.
         compiled_func_second_kernel(
-            w_tensor,
-            x_tensor,
-            y_tensor,
+            w,
+            x,
+            y,
             current_stream,
         )
 
     if not skip_ref_check:
-        run_func(current_stream, u_tensor, v_tensor, w_tensor, x_tensor, y_tensor)
+        run_func(current_stream, u, v, w, x, y)
         print("Verifying results...")
         torch.testing.assert_close(u.cpu() + v.cpu() + x.cpu(), y.cpu())
         print("Results verified successfully!")
@@ -331,14 +324,7 @@ def run_pdl_example(
         x = torch.randn(M, N, dtype=torch.float32, device="cuda")
         y = torch.empty(M, N, dtype=torch.float32, device="cuda")
 
-        u_tensor = from_dlpack(u).mark_layout_dynamic()
-        v_tensor = from_dlpack(v).mark_layout_dynamic()
-        w_tensor = from_dlpack(w).mark_layout_dynamic()
-        x_tensor = from_dlpack(x).mark_layout_dynamic()
-        y_tensor = from_dlpack(y).mark_layout_dynamic()
-        return testing.JitArguments(
-            current_stream, u_tensor, v_tensor, w_tensor, x_tensor, y_tensor
-        )
+        return testing.JitArguments(current_stream, u, v, w, x, y)
 
     avg_time_us = testing.benchmark(
         run_func,
@@ -347,6 +333,7 @@ def run_pdl_example(
         warmup_iterations=warmup_iterations,
         iterations=iterations,
         stream=current_stream,
+        use_cuda_graphs=True,
     )
     print(f"Execution time: {avg_time_us:.4f} us")
 
@@ -355,9 +342,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="example of Programmatic Dependent Launch (PDL) using CuTe DSL"
     )
-    parser.add_argument("--M", default=512, type=int)
-    parser.add_argument("--N", default=512, type=int)
-    parser.add_argument("--warmup_iterations", default=3, type=int)
+    parser.add_argument("--M", default=256, type=int)
+    parser.add_argument("--N", default=256, type=int)
+    parser.add_argument("--warmup_iterations", default=5, type=int)
     parser.add_argument("--iterations", default=10, type=int)
     parser.add_argument("--skip_ref_check", action="store_true")
     parser.add_argument("--benchmark", action="store_true")

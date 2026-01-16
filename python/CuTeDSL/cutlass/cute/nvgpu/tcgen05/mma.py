@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2025 - 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: LicenseRef-NvidiaProprietary
 #
 # Use of this software is governed by the terms and conditions of the
@@ -15,7 +15,7 @@ from typing import Type, Any
 
 from cutlass import cute
 from cutlass.base_dsl.arch import Arch
-from cutlass.cutlass_dsl import CuTeDSL, T
+from cutlass.cutlass_dsl import BaseDSL, T
 
 import cutlass._mlir.dialects.cute as _cute_ir
 import cutlass._mlir.dialects.cute_nvgpu as _cute_nvgpu_ir
@@ -162,7 +162,7 @@ class MmaOp(Tcgen05MmaOp):
 
     def __post_init__(self) -> None:
         # Verify arch
-        arch = CuTeDSL._get_dsl().get_arch_enum()
+        arch = BaseDSL._get_dsl().get_arch_enum()
         if arch not in self.admissible_archs:
             raise OpError(
                 self,
@@ -201,13 +201,13 @@ class MmaOp(Tcgen05MmaOp):
         if self.cta_group == CtaGroup.ONE:
             if m not in [64, 128]:
                 raise OpError(self, f"expects the M-mode to be 64 or 128, but got {m}")
-            if m == 64:
-                if (n < 8) or (n > 256) or (n % 8 != 0):
+            if self.b_dtype.width == 8 and self.b_major_mode == OperandMajorMode.MN:
+                if (n < 16) or (n > 256) or (n % 16 != 0):
                     raise OpError(
                         self,
-                        f"expects the N-mode to satisfy 8 <= N <= 256 and N % 8 == 0, but got {n}",
+                        f"expects the N-mode to satisfy 16 <= N <= 256 and N % 16 == 0, but got {n}",
                     )
-            elif m == 128:
+            else:
                 if (n < 8) or (n > 256) or (n % 8 != 0):
                     raise OpError(
                         self,
@@ -216,11 +216,18 @@ class MmaOp(Tcgen05MmaOp):
         else:
             if m not in [128, 256]:
                 raise OpError(self, f"expects the M-mode to be 128 or 256, but got {m}")
-            if (n < 16) or (n > 256) or (n % 16 != 0):
-                raise OpError(
-                    self,
-                    f"expects the N-mode to satisfy 16 <= N <= 256 and N % 16 == 0, but got {n}",
-                )
+            if self.b_dtype.width == 8 and self.b_major_mode == OperandMajorMode.MN:
+                if (n < 32) or (n > 256) or (n % 32 != 0):
+                    raise OpError(
+                        self,
+                        f"expects the N-mode to satisfy 32 <= N <= 256 and N % 32 == 0, but got {n}",
+                    )
+            else:
+                if (n < 16) or (n > 256) or (n % 16 != 0):
+                    raise OpError(
+                        self,
+                        f"expects the N-mode to satisfy 16 <= N <= 256 and N % 16 == 0, but got {n}",
+                    )
 
     def __str__(self) -> str:
         return (
@@ -302,11 +309,12 @@ class BlockScaledMmaOp(Tcgen05MmaOp):
 
     admissible_archs = [
         Arch.sm_100a,
+        Arch.sm_103a,
     ]
 
     def __post_init__(self) -> None:
         # Verify arch
-        arch = CuTeDSL._get_dsl().get_arch_enum()
+        arch = BaseDSL._get_dsl().get_arch_enum()
         if arch not in self.admissible_archs:
             raise OpError(
                 self,
@@ -463,7 +471,7 @@ class SparseMmaOp(Tcgen05MmaOp):
 
     def __post_init__(self) -> None:
         # Verify arch
-        arch = CuTeDSL._get_dsl().get_arch_enum()
+        arch = BaseDSL._get_dsl().get_arch_enum()
         if arch not in self.admissible_archs:
             raise OpError(
                 self,

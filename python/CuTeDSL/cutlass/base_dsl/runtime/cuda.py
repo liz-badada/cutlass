@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2025 - 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: LicenseRef-NvidiaProprietary
 #
 # Use of this software is governed by the terms and conditions of the
@@ -21,17 +21,12 @@ import os
 import ctypes
 
 import cuda.bindings.driver as cuda
+import cuda.bindings.runtime as cudart
 import cuda.bindings.nvrtc as nvrtc
-
-# MLIR imports
-from ..._mlir import ir
-from ..._mlir.dialects import gpu
 
 # Local module imports
 from ..utils.logger import log as _log
 from ..common import *
-from .jit_arg_adapters import JitArgAdapterRegistry
-
 
 # =============================================================================
 # Utils
@@ -50,6 +45,8 @@ def _cudaGetErrorEnum(error):
     if isinstance(error, cuda.CUresult):
         err, name = cuda.cuGetErrorName(error)
         return name if err == cuda.CUresult.CUDA_SUCCESS else "<unknown>"
+    elif isinstance(error, cudart.cudaError_t):
+        return cudart.cudaGetErrorName(error)[1]
     elif isinstance(error, nvrtc.nvrtcResult):
         return nvrtc.nvrtcGetErrorString(error)[1]
     else:
@@ -504,18 +501,18 @@ def load_library_data(cubin_data):
     """
     Loads a CUBIN from data and returns the library.
     :param cubin_data: The binary data of the CUBIN.
-    :type cubin_data: bytes
+    :type cubin_data: bytes or ctypes.c_void_p
     :return: The library.
     :rtype: cuda.CUlibrary
     :raise DSLRuntimeError: If the CUDA operation fails.
     """
     # Load module data
-    _log().info(f"cuLibraryLoadData {np.char.array(cubin_data).ctypes.data}")
+    if isinstance(cubin_data, bytes):
+        cubin_data = np.char.array(cubin_data).ctypes.data
+    _log().info(f"cuLibraryLoadData {cubin_data}")
 
     library = checkCudaErrors(
-        cuda.cuLibraryLoadData(
-            np.char.array(cubin_data).ctypes.data, None, None, 0, None, None, 0
-        )
+        cuda.cuLibraryLoadData(cubin_data, None, None, 0, None, None, 0)
     )
     return library
 
@@ -803,24 +800,3 @@ def get_device_attribute(attribute, device_id: int = 0):
     """
     device = checkCudaErrors(cuda.cuDeviceGet(device_id))
     return checkCudaErrors(cuda.cuDeviceGetAttribute(attribute, device))
-
-
-@JitArgAdapterRegistry.register_jit_arg_adapter(cuda.CUstream)
-class StreamAdapter:
-    """
-    Convert a CUDA stream to a stream representation for JIT arg generation.
-    """
-
-    def __init__(self, arg):
-        self._arg = arg
-        self._c_pointer = self._arg.getPtr()
-
-    def __new_from_mlir_values__(self, values):
-        assert len(values) == 1
-        return values[0]
-
-    def __c_pointers__(self):
-        return [self._c_pointer]
-
-    def __get_mlir_types__(self):
-        return [gpu.AsyncTokenType.get()]

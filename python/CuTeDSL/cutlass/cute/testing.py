@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2025 - 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: LicenseRef-NvidiaProprietary
 #
 # Use of this software is governed by the terms and conditions of the
@@ -20,6 +20,7 @@ from typing import Type, Union, Callable, Optional, Dict, List, Any
 import cuda.bindings.driver as cuda_driver
 import cuda.bindings.runtime as cuda_runtime
 
+import cutlass
 import cutlass.base_dsl.jit_executor
 from cutlass.cutlass_dsl import Constexpr, CuTeDSL, T, dsl_user_op
 
@@ -233,6 +234,7 @@ def convert(src: cute.Tensor, dst: cute.Tensor):
         src.shape[leading_mode] % elem_per_copy == 0
         and dst.shape[leading_mode] % elem_per_copy == 0
     )
+
     _convert(src, dst, leading_mode, elem_per_copy)
 
 
@@ -405,7 +407,7 @@ def benchmark(
     To use CUDA graphs, the callable must be a compiled @cute.jit annotated function.
     When using CUDA graphs, the kernel must be launched in a non-default stream.
 
-    :param callable: The function to benchmark
+    :param callable: The function to benchmark. For jit function, it must be compiled functions.
     :type callable: Callable
     :param warmup_iterations: Number of warmup iterations, defaults to 10
     :type warmup_iterations: int, optional
@@ -473,15 +475,6 @@ def benchmark(
     elapsed_time = float("nan")
 
     if use_cuda_graphs:
-        # Check if the callable is a JitCompiledFunction or JitExecutor
-        # These are functions that can be called to launch kernels
-        compiled_types = (
-            cutlass.base_dsl.jit_executor.JitCompiledFunction,
-            cutlass.base_dsl.jit_executor.JitExecutor,
-        )
-        if not isinstance(callable, compiled_types):
-            raise TypeError("Function must be precompiled to be used with CUDA Graphs")
-
         # Check if the stream is a non-default stream
         if int(stream) == int(cuda_driver.CUstream_flags.CU_STREAM_DEFAULT):
             raise ValueError(
@@ -1057,7 +1050,7 @@ def tune(
         except NotImplementedError as e:
             logger.info(f"   Encountered unimplemented error, abort execution: {e}")
             raise e
-        except (ValueError, TypeError) as e:
+        except (ValueError, TypeError, CantImplementError) as e:
             logger.info(f"   Configuration parameter skipping: {e}")
             continue
         except Exception as e:
@@ -1073,3 +1066,17 @@ def tune(
     logger.info(f"Best configuration: {best_config}, execution time: {min_time} us")
     logger.info(f"Total tuning time: {tuning_time} s")
     return best_config
+
+
+class CantImplementError(Exception):
+    """Exception raised when a function is not implemented."""
+
+    def __init__(self, message=None):
+        self.message = message or "The current config is invalid/unsupported"
+        super().__init__(self.message)
+
+    def __str__(self):
+        return self.message
+
+    def __repr__(self):
+        return self.message
